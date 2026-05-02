@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const p = require\\('./node_modules/jimp/package.json'\\); console.log\\(p.version\\)\")",
+      "Bash(node -e \"const p=require\\('./package.json'\\); const deps={...p.dependencies,...p.devDependencies}; const keys=Object.keys\\(deps\\).filter\\(k=>/\\(pdf|canvas|jimp|jsqr|sharp|image\\)/i.test\\(k\\)\\); console.log\\(JSON.stringify\\(keys,null,2\\)\\)\")",
+      "Bash(node -e \"try{require\\('canvas'\\);console.log\\('canvas OK'\\)}catch\\(e\\){console.log\\('canvas NOT installed'\\)}\")",
+      "Bash(node -e \"const b=require\\('fs'\\).readFileSync\\('C:/Users/demet/OneDrive/Desktop/FastDocu/src/lib/ocr/../../../000000272624_0004_00117912_Original.pdf' 2>/dev/null\\)||Buffer.alloc\\(0\\); console.log\\('not found'\\)\")",
+      "Bash(ls *.pdf)",
+      "Bash(dir /b *.pdf)",
+      "Read(//c/Users/demet/OneDrive/**)",
+      "Bash(node -e \"require\\('@napi-rs/canvas'\\); console.log\\('OK'\\)\")",
+      "Bash(node -e ' *)"
+    ]
+  }
+}
