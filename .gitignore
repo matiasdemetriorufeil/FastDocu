@@ -39,3 +39,20 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Tesseract — datos de idioma (binarios grandes, se reinstalan con el setup)
+*.traineddata
+
+# Directorios temporales del proyecto
+fastdocu-tmp/
+tmp/
+temp/
+
+# OS — Windows
+Thumbs.db
+desktop.ini
+
+# Editores
+.idea/
+*.swp
+*.swo

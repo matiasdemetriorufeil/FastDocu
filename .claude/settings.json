@@ -9,7 +9,8 @@
       "Bash(dir /b *.pdf)",
       "Read(//c/Users/demet/OneDrive/**)",
       "Bash(node -e \"require\\('@napi-rs/canvas'\\); console.log\\('OK'\\)\")",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\('name:',d.name,'\\\\ndeps:',Object.keys\\({...d.dependencies,...d.devDependencies}\\).join\\(', '\\)\\)\")"
     ]
   }
 }
