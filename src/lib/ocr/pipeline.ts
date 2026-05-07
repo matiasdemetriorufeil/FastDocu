@@ -176,15 +176,26 @@ export class FastDocuOCR {
             return { qrData: rawQr.data, qrSource: rawQr.source };
         }
 
-        // ── Estrategia D: renderizar página y escanear QR con jsqr ────────────
-        // Último recurso: el QR es una imagen gráfica sin URL embedida en ningún
-        // lado (ICARO/Sicar y otros generadores que no exponen la URL como texto).
-        // Usa pdfjs-dist + @napi-rs/canvas para renderizar la página a píxeles.
-        console.log('[OCR] QR no encontrado en texto/anotaciones/bytes → renderizando página...');
-        const renderedQr = await QRExtractor.extractFromPdfRendered(buffer);
-        if (renderedQr) {
-            output.invoice = this.mergeWithQr(InvoiceParser.parse(nativeText), renderedQr.data);
-            return { qrData: renderedQr.data, qrSource: renderedQr.source };
+        // ── Estrategia D: extraer imágenes JPEG embebidas del PDF binario ────────
+        // Último recurso para PDFs donde el QR es una imagen gráfica (ICARO/Sicar).
+        // Extrae cada JPEG directamente del stream binario y lo escanea con jsqr.
+        // Más rápido y estable que renderizar toda la página.
+        console.log('[OCR] QR no encontrado en texto/anotaciones/bytes → extrayendo imágenes embebidas...');
+        const embeddedQr = await QRExtractor.extractFromPdfEmbeddedImages(buffer);
+        if (embeddedQr) {
+            output.invoice = this.mergeWithQr(InvoiceParser.parse(nativeText), embeddedQr.data);
+            return { qrData: embeddedQr.data, qrSource: embeddedQr.source };
+        }
+
+        // ── Estrategia E: imágenes inline del content stream vía getOperatorList() ─
+        // Cubre PDFs legacy (FPDF/PHP) donde el QR está como imagen BI/ID/EI con
+        // ASCII85+LZW — invisible para los buscadores binarios pero decodificado
+        // automáticamente por pdfjs. Sin canvas, sin riesgo de segfault.
+        console.log('[OCR] QR no encontrado en imágenes XObject → buscando imágenes inline...');
+        const inlineQr = await QRExtractor.extractFromPdfInlineImages(buffer);
+        if (inlineQr) {
+            output.invoice = this.mergeWithQr(InvoiceParser.parse(nativeText), inlineQr.data);
+            return { qrData: inlineQr.data, qrSource: inlineQr.source };
         }
 
         // ── Fallback final: solo regex sobre el texto ─────────────────────────

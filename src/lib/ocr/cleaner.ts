@@ -26,27 +26,45 @@ export class InvoiceCleaner {
         }
 
         // ─── Cross-Validación de Montos ─────────────────────────────────────
+        // Factura A/M: IVA es adicional → subtotal + iva = total
+        // Factura B/C y resto: IVA Contenido (ya incluido) → total = subtotal
+        const tipoFactura = cleaned.tipo_factura?.toUpperCase() ?? '';
+        const ivaAdicional = tipoFactura === 'A' || tipoFactura === 'M';
+
         if (cleaned.total != null && cleaned.subtotal != null && cleaned.iva != null) {
-            const expected = cleaned.subtotal + cleaned.iva;
-            const diff = Math.abs(cleaned.total - expected);
-            if (diff > 0.05) {
-                warnings.push(`Cross-validación: Total (${cleaned.total}) ≠ Subtotal (${cleaned.subtotal}) + IVA (${cleaned.iva}). Diferencia: ${diff.toFixed(2)}`);
+            if (ivaAdicional) {
+                const diff = Math.abs(cleaned.total - (cleaned.subtotal + cleaned.iva));
+                if (diff > 0.05) {
+                    warnings.push(`Cross-validación: Total (${cleaned.total}) ≠ Subtotal (${cleaned.subtotal}) + IVA (${cleaned.iva}). Diferencia: ${diff.toFixed(2)}`);
+                }
+            } else {
+                // IVA Contenido: el total debe coincidir con el subtotal
+                const diff = Math.abs(cleaned.total - cleaned.subtotal);
+                if (diff > 0.05) {
+                    warnings.push(`Cross-validación: Total (${cleaned.total}) ≠ Subtotal (${cleaned.subtotal}). Diferencia: ${diff.toFixed(2)}`);
+                }
             }
         }
 
         // ─── Inferir IVA si falta ───────────────────────────────────────────
         if (cleaned.iva == null && cleaned.total != null && cleaned.subtotal != null) {
-            cleaned.iva = Math.round((cleaned.total - cleaned.subtotal) * 100) / 100;
-            if (cleaned.iva < 0) cleaned.iva = 0;
+            if (ivaAdicional) {
+                // Factura A/M: iva = total - subtotal
+                cleaned.iva = Math.round((cleaned.total - cleaned.subtotal) * 100) / 100;
+                if (cleaned.iva < 0) cleaned.iva = 0;
+            }
+            // Factura B/C: IVA contenido no se puede inferir de total y subtotal
         }
 
         // ─── Inferir Subtotal si falta ──────────────────────────────────────
         if (cleaned.subtotal == null && cleaned.total != null) {
-            if (!cleaned.iva || cleaned.iva === 0) {
-                // Monotributo / Exento: subtotal = total
+            if (!ivaAdicional) {
+                // Factura B/C: subtotal = total (IVA ya incluido)
+                cleaned.subtotal = cleaned.total;
+            } else if (!cleaned.iva || cleaned.iva === 0) {
                 cleaned.subtotal = cleaned.total;
             } else {
-                // Factura B con IVA Contenido: neto = total - iva
+                // Factura A: subtotal = total - iva
                 cleaned.subtotal = Math.round((cleaned.total - cleaned.iva) * 100) / 100;
             }
         }

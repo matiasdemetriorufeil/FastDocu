@@ -112,19 +112,33 @@ export class ScoringEngine {
     /**
      * Evalúa la coherencia interna de los montos (20 pts).
      *
-     * - subtotal + iva ≈ total (dentro de $0.05): 20 pts
-     * - total presente pero subtotal o iva faltan: 10 pts (no verificable)
-     * - total ausente: 0 pts
-     * - total presente, subtotal e iva presentes pero no cuadran: 0 pts
+     * Factura A/M (IVA adicional): subtotal + iva ≈ total
+     * Factura B/C y resto (IVA contenido): total ≈ subtotal
+     *
+     * - Fórmula correcta cumplida (dentro de $0.05): 20 pts
+     * - Campos insuficientes para verificar: 10 pts
+     * - Total ausente: 0 pts
+     * - Fórmula no cumplida: 0 pts
      */
     private static scoreAmountCoherence(invoice: InvoiceData): number {
-        const { total, subtotal, iva } = invoice;
+        const { total, subtotal, iva, tipo_factura } = invoice;
 
         if (total == null) return 0;
-        if (subtotal == null || iva == null) return 10;
 
-        const diff = Math.abs(total - (subtotal + iva));
-        return diff <= 0.05 ? 20 : 0;
+        const tipoUpper = tipo_factura?.toUpperCase() ?? '';
+        const ivaAdicional = tipoUpper === 'A' || tipoUpper === 'M';
+
+        if (ivaAdicional) {
+            // Factura A/M: subtotal + iva = total
+            if (subtotal == null || iva == null) return 10;
+            const diff = Math.abs(total - (subtotal + iva));
+            return diff <= 0.05 ? 20 : 0;
+        } else {
+            // Factura B/C: IVA contenido, total debe coincidir con subtotal
+            if (subtotal == null) return 10;
+            const diff = Math.abs(total - subtotal);
+            return diff <= 0.05 ? 20 : 0;
+        }
     }
 
     /**

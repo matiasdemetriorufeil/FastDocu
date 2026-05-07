@@ -92,9 +92,16 @@ export class InvoiceParser {
     // ── Número de Comprobante ─────────────────────────────────────────────────
 
     private static extractNumeroFactura(text: string): string | null {
-        // "Punto de Venta: 00001 Comp. Nro.: 00001234"
+        // "Punto de Venta: 00001 Comp. Nro.: 00001234" — en una sola línea
         let m = text.match(
             /Punto\s+de\s+Venta[:\s]*(\d{1,5})\s+Comp(?:robante)?\.?\s+N[rº°o]+\.?[:\s]*(\d{1,8})/i,
+        );
+        if (m) return `${m[1].padStart(4, '0')}-${m[2].padStart(8, '0')}`;
+
+        // "Punto de Venta: Comp. Nro:\n00001 00000272" — etiquetas y valores en líneas separadas
+        // (formato ARCA/AFIP donde la fila de encabezado y la fila de datos son distintas)
+        m = text.match(
+            /Punto\s+de\s+Venta[^\n]*Comp(?:robante)?\.?\s*N[rº°o]+\.?[:\s]*\n\s*(\d{1,5})\s+(\d{1,8})/i,
         );
         if (m) return `${m[1].padStart(4, '0')}-${m[2].padStart(8, '0')}`;
 
@@ -311,10 +318,12 @@ export class InvoiceParser {
         );
         if (m) {
             let val = m[1]
+                .replace(/^\/\s*Raz[oó]n\s+Social\s*:?\s*/i, '')            // "/ Razón Social: " como prefijo
+                .replace(/^Raz[oó]n\s+Social\s*:?\s*/i, '')                 // "Razón Social: " como prefijo
                 .replace(/\d{2}-\d{8}-\d/g, '')                             // quitar CUITs inline
                 .replace(/\s*Nro\.?\s*(?:Cliente|Cl\.?)?[:\s]*\d+.*/i, '')  // "Nro. Cliente: 186"
                 .replace(/\s*N[°º]\s*(?:Cliente|Cl\.?)?[:\s]*\d+.*/i, '')   // "N° Cliente: 186"
-                .replace(/\s*C[\s.]*U[\s.]*I[\s.]*T[\s.]*\s*.*/i, '')           // CUIT al final (con o sin puntos/espacios)
+                .replace(/\s*C[\s.]*U[\s.]*I[\s.]*T[\s.]*\s*.*/i, '')       // CUIT al final
                 .replace(/\s+\d{11}\s*$/, '')                                // CUIT como digits crudos al final
                 .replace(/\s+\d{8,}\s*$/, '')                                // otros números largos al final
                 .trim();
@@ -407,15 +416,13 @@ export class InvoiceParser {
         // "IVA 21%: 210,00" / "Alícuota IVA 21%: 210,00" / "I.V.A.: 210,00"
         // Requiere separador (: o $) para no confundir con "IVA 21,0%" de header de columna.
         // (?!\s+Contenido) evita solaparse con las líneas de Transparencia Fiscal.
+        // (?!\s*%) al final evita capturar la alícuota "21,0%" como si fuera el monto.
         let m = text.match(
-            /(?:Al[ií]cuota\s+)?I\.?V\.?A\.?(?!\s+Contenido)\s*(?:21|10[.,]5|27|0)?\s*%?\s*[:\s$]+\$?\s*([\d][\d.]*,[\d]{1,2})/i,
+            /(?:Al[ií]cuota\s+)?I\.?V\.?A\.?(?!\s+Contenido)\s*(?:21|10[.,]5|27|0)?\s*%?\s*[:\s$]+\$?\s*([\d][\d.]*,[\d]{1,2})(?!\s*%)/i,
         );
         if (m) {
-            const raw = m[1].trim();
-            if (!raw.endsWith('%')) {
-                const val = this.parseArgentineNumber(raw);
-                if (val >= 0) return val;
-            }
+            const val = this.parseArgentineNumber(m[1].trim());
+            if (val >= 0) return val;
         }
 
         // Patrón 2: "IVA Contenido: [XX%] $ amount" (Ley 27.743 - Transparencia Fiscal).
@@ -423,16 +430,17 @@ export class InvoiceParser {
         //   "IVA Contenido: $ 1.800.560,58"       (INFORCE — sin alícuota explícita)
         //   "IVA Contenido: 21% $ 54.646,86"      (BOGAMAC — con alícuota antes del $)
         //   "IVA Contenido: $\n1.800.560,58"       (pdfjs a veces parte la línea)
-        // Suma todos los renglones (puede haber uno por alícuota 21% + 10,5%).
+        // Usa Set para deduplicar: PDFs con múltiples páginas (Original+Duplicado) repiten el
+        // mismo monto; facturas con más de una alícuota tienen montos distintos que sí se suman.
         const ivaContenidoRe = /IVA\s+Contenido\s*[:\s]*(?:\d+[.,]?\d*\s*%\s*)?\$?\s*([\d][\d.]*,[\d]{1,2})/gi;
-        let ivaSum = 0;
-        let foundContenido = false;
+        const uniqueIvaAmounts = new Set<number>();
         let mc: RegExpExecArray | null;
         while ((mc = ivaContenidoRe.exec(text)) !== null) {
-            ivaSum += this.parseArgentineNumber(mc[1]);
-            foundContenido = true;
+            uniqueIvaAmounts.add(this.parseArgentineNumber(mc[1]));
         }
-        if (foundContenido) return ivaSum;
+        if (uniqueIvaAmounts.size > 0) {
+            return [...uniqueIvaAmounts].reduce((a, b) => a + b, 0);
+        }
 
         // Patrón 3: layout de columnas → segundo monto de la fila de valores.
         // "Subtotal  IVA 21,0%  IVA 10,5%  TOTAL"

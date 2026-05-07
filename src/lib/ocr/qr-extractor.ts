@@ -1,3 +1,4 @@
+import { inflateSync } from 'zlib';
 import type { InvoiceData } from './types';
 
 /**
@@ -41,6 +42,17 @@ interface AfipQrPayload {
     codAut: number;     // número de CAE/CAEA
 }
 
+interface PdfImageEntry {
+    stream: Buffer;
+    width: number;
+    height: number;
+    filter: 'dct' | 'flate';
+    bpc: number;
+    channels: number;
+    predictor: number;
+    paletteRef: string | null;
+}
+
 export class QRExtractor {
 
     /**
@@ -76,14 +88,14 @@ export class QRExtractor {
 
                     for (const candidate of candidates) {
                         const match = candidate.match(
-                            /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_%\-]+)/i,
+                            /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_%\-]+)/i,
                         );
                         if (match) {
                             // La URL puede estar percent-encoded dentro del PDF
                             const base64 = decodeURIComponent(match[1]);
                             const data = this.parseAfipBase64(base64);
                             if (data) {
-                                console.log('[QR] URL AFIP encontrada en anotación PDF');
+                                console.log('[QR] URL AFIP/ARCA encontrada en anotación PDF');
                                 return { data, source: 'url' };
                             }
                         }
@@ -109,7 +121,7 @@ export class QRExtractor {
         // latin1 preserva los bytes 1:1 sin modificar — ideal para buscar texto ASCII
         const raw = buffer.toString('latin1');
         const match = raw.match(
-            /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_%\-]+)/i,
+            /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_%\-]+)/i,
         );
         if (!match) return null;
 
@@ -135,7 +147,7 @@ export class QRExtractor {
     ): { data: Partial<InvoiceData>; source: 'url' | 'barcode' } | null {
         // Estrategia 1: URL del QR AFIP (RG 4786/2020)
         const qrMatch = text.match(
-            /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i,
+            /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i,
         );
         if (qrMatch) {
             console.log('[QR] URL de QR AFIP encontrada en texto PDF');
@@ -201,55 +213,456 @@ export class QRExtractor {
     }
 
     /**
-     * Estrategia 1-extra-c: renderiza la página del PDF a imagen usando
-     * pdfjs-dist + @napi-rs/canvas, luego escanea el QR con jsqr.
-     * Cubre todos los casos donde el QR es puramente gráfico (ICARO, Sicar, etc.)
-     * sin URL embedida como texto ni como anotación.
-     * Escanea las primeras 3 páginas en caso de facturas multi-página.
+     * Estrategia D: extrae imágenes embebidas directamente del PDF binario
+     * y escanea cada una buscando un QR AFIP.
+     *
+     * Soporta los dos formatos más comunes en facturas argentinas:
+     *  - DCTDecode (JPEG): ICARO, Sicar — bytes pasados directo a Jimp
+     *  - FlateDecode (zlib): Thomson Reuters — descomprime, aplica paleta, pasa a jsqr
+     * Evita renderizar el PDF completo (causa segfault en Node.js) y funciona en O(n).
      */
-    static async extractFromPdfRendered(
+    static async extractFromPdfEmbeddedImages(
         buffer: Buffer,
     ): Promise<{ data: Partial<InvoiceData>; source: 'image_scan' } | null> {
         try {
-            const [pdfjs, { createCanvas }] = await Promise.all([
-                import('pdfjs-dist/legacy/build/pdf.mjs') as Promise<any>,
-                import('@napi-rs/canvas') as Promise<any>,
-            ]);
+            const raw = buffer.toString('latin1');
+            const images = this.extractPdfImageEntries(raw, buffer);
+            if (images.length === 0) return null;
 
-            const doc = await pdfjs.getDocument({
-                data: new Uint8Array(buffer),
-                useSystemFonts: true,
-            }).promise;
+            console.log(`[QR] ${images.length} imagen(es) encontrada(s) en el PDF binario`);
 
-            for (let pageNum = 1; pageNum <= Math.min(doc.numPages, 3); pageNum++) {
-                const page = await doc.getPage(pageNum);
-                // 2× escala: mejora la detección del QR sin ser excesivamente lento
-                const viewport = page.getViewport({ scale: 2.0 });
-                const canvas = createCanvas(Math.round(viewport.width), Math.round(viewport.height));
-                const context = canvas.getContext('2d');
+            // Evaluar primero las más cuadradas (QR codes tienen ratio 1:1)
+            images.sort((a, b) =>
+                Math.abs(1 - a.width / a.height) - Math.abs(1 - b.width / b.height),
+            );
 
-                await page.render({ canvasContext: context, viewport }).promise;
+            const jsQR = await import('jsqr').then(m => m.default ?? m);
 
-                // Reutilizar el scanner existente (jimp + jsqr)
-                const pngBuffer: Buffer = canvas.toBuffer('image/png');
-                const qrText = await this.scanQrFromImageBuffer(pngBuffer);
-                if (!qrText) continue;
+            for (const img of images) {
+                console.log(`[QR] Escaneando imagen ${img.width}×${img.height} filtro=${img.filter} bpc=${img.bpc} ch=${img.channels} pred=${img.predictor} bytes=${img.stream.length}`);
+                let qrText: string | null = null;
+
+                if (img.filter === 'dct') {
+                    qrText = await this.scanQrFromImageBuffer(img.stream);
+                } else if (img.filter === 'flate') {
+                    qrText = this.scanQrFromFlateImage(jsQR, img, raw, buffer);
+                }
+
+                if (!qrText) {
+                    console.log(`[QR] → sin QR en esta imagen`);
+                    continue;
+                }
+                console.log(`[QR] → texto leído: ${qrText.substring(0, 80)}`);
 
                 const match = qrText.match(
-                    /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_\-]+)/i,
+                    /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_\-]+)/i,
                 );
-                if (!match) continue;
+                if (!match) {
+                    console.log(`[QR] → QR encontrado pero no es URL AFIP`);
+                    continue;
+                }
 
                 const data = this.parseAfipBase64(match[1]);
                 if (data) {
-                    console.log(`[QR] QR AFIP encontrado renderizando página ${pageNum} del PDF`);
+                    console.log(`[QR] QR AFIP en imagen embebida ${img.width}×${img.height} (${img.filter})`);
                     return { data, source: 'image_scan' };
                 }
             }
         } catch (err: any) {
-            console.warn('[QR] Error renderizando PDF para escaneo QR:', err.message);
+            console.warn('[QR] Error extrayendo imágenes del PDF:', err.message);
         }
         return null;
+    }
+
+    /**
+     * Estrategia E: extrae imágenes inline del contenido del PDF vía getOperatorList().
+     *
+     * Cubre PDFs generados con FPDF/PHP legacy que codifican el QR como imagen inline
+     * (BI/ID/EI con ASCII85+LZW), no como XObject. pdfjs decodifica automáticamente
+     * la imagen a RGBA — solo necesitamos pasársela a jsqr.
+     * NO requiere canvas ni rendering → sin riesgo de segfault.
+     */
+    static async extractFromPdfInlineImages(
+        buffer: Buffer,
+    ): Promise<{ data: Partial<InvoiceData>; source: 'image_scan' } | null> {
+        try {
+            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+            const pdfjsLib = (pdfjs as any).default ?? pdfjs;
+            const OPS = pdfjsLib.OPS ?? {};
+            const OP_inline = OPS.paintInlineImageXObject ?? 86;
+            const OP_xobj   = OPS.paintImageXObject       ?? 85;
+
+            const doc = await (pdfjsLib as any).getDocument({
+                data: new Uint8Array(buffer),
+                useSystemFonts: true,
+            }).promise;
+
+            const jsQR = await import('jsqr').then(m => m.default ?? m);
+
+            for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+                const page = await doc.getPage(pageNum);
+                const opList = await page.getOperatorList();
+
+                // ── Imágenes inline (Griguol/FPDF legacy — ASCII85+LZW) ──────────
+                for (let i = 0; i < opList.fnArray.length; i++) {
+                    if (opList.fnArray[i] !== OP_inline) continue;
+
+                    const img = opList.argsArray[i]?.[0];
+                    if (!img?.data || !img.width || !img.height) continue;
+
+                    const result = this.tryQrFromImageData(jsQR, img.data, img.width, img.height);
+                    if (result) {
+                        console.log(`[QR] QR AFIP/ARCA en imagen inline ${img.width}×${img.height}`);
+                        return { data: result, source: 'image_scan' };
+                    }
+                }
+
+                // ── XObject images (ARCA/AFIP — sin filtro, DeviceGray o RGB) ───
+                // Tras getOperatorList(), las imágenes quedan resueltas en page.objs.
+                const xobjNames = new Set<string>();
+                for (let i = 0; i < opList.fnArray.length; i++) {
+                    if (opList.fnArray[i] === OP_xobj) {
+                        const name = opList.argsArray[i]?.[0];
+                        if (name && typeof name === 'string') xobjNames.add(name);
+                    }
+                }
+
+                for (const name of xobjNames) {
+                    const imgData: any = await new Promise<any>((resolve) => {
+                        page.objs.get(name, (d: any) => resolve(d ?? null));
+                    });
+                    if (!imgData?.data || !imgData.width || !imgData.height) continue;
+
+                    const result = this.tryQrFromImageData(jsQR, imgData.data, imgData.width, imgData.height);
+                    if (result) {
+                        console.log(`[QR] QR AFIP/ARCA en XObject ${name} ${imgData.width}×${imgData.height}`);
+                        return { data: result, source: 'image_scan' };
+                    }
+                }
+            }
+        } catch (err: any) {
+            console.warn('[QR] Error en getOperatorList:', err.message);
+        }
+        return null;
+    }
+
+    /**
+     * Convierte datos de imagen (RGBA/RGB/Gray) a Uint8ClampedArray RGBA,
+     * escanea con jsqr y devuelve los datos AFIP si hay QR.
+     */
+    private static tryQrFromImageData(
+        jsQR: any,
+        data: ArrayLike<number>,
+        w: number,
+        h: number,
+    ): Partial<InvoiceData> | null {
+        const dataLen: number = (data as any).length;
+        const channels = dataLen === w * h * 4 ? 4
+            : dataLen === w * h * 3 ? 3
+            : dataLen === w * h ? 1 : 0;
+
+        let rgba: Uint8ClampedArray;
+        if (channels === 4) {
+            rgba = new Uint8ClampedArray(data as any);
+        } else if (channels === 3) {
+            rgba = new Uint8ClampedArray(w * h * 4);
+            for (let p = 0; p < w * h; p++) {
+                rgba[p * 4]     = (data as any)[p * 3];
+                rgba[p * 4 + 1] = (data as any)[p * 3 + 1];
+                rgba[p * 4 + 2] = (data as any)[p * 3 + 2];
+                rgba[p * 4 + 3] = 255;
+            }
+        } else if (channels === 1) {
+            rgba = new Uint8ClampedArray(w * h * 4);
+            for (let p = 0; p < w * h; p++) {
+                rgba[p * 4] = rgba[p * 4 + 1] = rgba[p * 4 + 2] = (data as any)[p];
+                rgba[p * 4 + 3] = 255;
+            }
+        } else if (dataLen === Math.ceil(w / 8) * h) {
+            // GRAYSCALE_1BPP (pdfjs kind=1): 1 bit per pixel, packed MSB-first per row
+            const stride = Math.ceil(w / 8);
+            rgba = new Uint8ClampedArray(w * h * 4);
+            for (let row = 0; row < h; row++) {
+                for (let col = 0; col < w; col++) {
+                    const byteOff = row * stride + Math.floor(col / 8);
+                    const bit = ((data as any)[byteOff] >> (7 - col % 8)) & 1;
+                    const gray = bit ? 255 : 0;
+                    const p = (row * w + col) * 4;
+                    rgba[p] = rgba[p + 1] = rgba[p + 2] = gray;
+                    rgba[p + 3] = 255;
+                }
+            }
+        } else {
+            rgba = new Uint8ClampedArray(data as any);
+        }
+
+        const qrText = this.scanQrFromRgba(jsQR, rgba, w, h);
+        if (!qrText) return null;
+
+        const qrNorm = qrText.replace(/[\r\n]/g, '');
+        const match = qrNorm.match(
+            /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_\-]+)/i,
+        );
+        if (!match) return null;
+
+        return this.parseAfipBase64(match[1]);
+    }
+
+    /** Escanea RGBA con jsqr; si falla, reintenta escalando 4x y 8x. */
+    private static scanQrFromRgba(jsQR: any, rgba: Uint8ClampedArray, w: number, h: number): string | null {
+        const direct = (jsQR as any)(rgba, w, h, { inversionAttempts: 'attemptBoth' });
+        if (direct?.data) return direct.data;
+
+        for (const scale of [4, 8, 2]) {
+            const sw = w * scale, sh = h * scale;
+            const scaled = new Uint8ClampedArray(sw * sh * 4);
+            for (let sy = 0; sy < sh; sy++) {
+                for (let sx = 0; sx < sw; sx++) {
+                    const ox = Math.floor(sx / scale);
+                    const oy = Math.floor(sy / scale);
+                    const si = (sy * sw + sx) * 4;
+                    const oi = (oy * w + ox) * 4;
+                    scaled[si]     = rgba[oi];
+                    scaled[si + 1] = rgba[oi + 1];
+                    scaled[si + 2] = rgba[oi + 2];
+                    scaled[si + 3] = 255;
+                }
+            }
+            const r = (jsQR as any)(scaled, sw, sh, { inversionAttempts: 'attemptBoth' });
+            if (r?.data) return r.data;
+        }
+        return null;
+    }
+
+    /** Descomprime una imagen FlateDecode y escanea su QR sincrónicamente. */
+    private static scanQrFromFlateImage(
+        jsQR: any,
+        img: PdfImageEntry,
+        raw: string,
+        buffer: Buffer,
+    ): string | null {
+        try {
+            let pixelData: Buffer = Buffer.from(inflateSync(img.stream));
+            const expectedPixels = img.width * img.height;
+
+            // Si hay DecodeParms con Predictor ≥ 10 (PNG filter), desaplicar predictor
+            if (img.predictor >= 10) {
+                pixelData = this.removePngPredictor(pixelData, img.width, img.bpc, img.channels);
+            }
+
+            if (pixelData.length < expectedPixels) return null;
+
+            // Resolver paleta si el colorspace es Indexed
+            const palette = img.paletteRef ? this.resolvePalette(img.paletteRef, raw, buffer) : null;
+
+            const rgba = new Uint8ClampedArray(img.width * img.height * 4);
+            for (let i = 0; i < Math.min(pixelData.length, img.width * img.height); i++) {
+                const v = pixelData[i];
+                let r: number, g: number, b: number;
+                if (palette) {
+                    r = palette[v * 3];
+                    g = palette[v * 3 + 1];
+                    b = palette[v * 3 + 2];
+                } else {
+                    // DeviceGray u otro: escalar el valor al rango 0-255
+                    const gray = img.bpc === 1 ? (v ? 255 : 0) : v;
+                    r = g = b = gray;
+                }
+                rgba[i * 4]     = r;
+                rgba[i * 4 + 1] = g;
+                rgba[i * 4 + 2] = b;
+                rgba[i * 4 + 3] = 255;
+            }
+
+            const result = (jsQR as any)(rgba, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+            return result?.data ?? null;
+        } catch {
+            return null;
+        }
+    }
+
+    /** Aplica la función de desfilterado PNG (Predictor 12/15) fila a fila. */
+    private static removePngPredictor(data: Buffer, width: number, bpc: number, channels: number): Buffer {
+        const bytesPerPixel = Math.ceil(bpc * channels / 8);
+        const bytesPerRow = Math.ceil(width * bpc * channels / 8);
+        const rowStride = bytesPerRow + 1; // +1 for filter byte
+        const out = Buffer.allocUnsafe(bytesPerRow * Math.floor(data.length / rowStride));
+        let outPos = 0;
+
+        for (let rowStart = 0; rowStart + rowStride <= data.length; rowStart += rowStride) {
+            const filterType = data[rowStart];
+            const row = data.slice(rowStart + 1, rowStart + rowStride);
+            const prev = outPos >= bytesPerRow ? out.slice(outPos - bytesPerRow, outPos) : Buffer.alloc(bytesPerRow);
+
+            for (let i = 0; i < bytesPerRow; i++) {
+                const x = row[i];
+                const a = i >= bytesPerPixel ? out[outPos + i - bytesPerPixel] : 0;
+                const b2 = prev[i] ?? 0;
+                const c = i >= bytesPerPixel ? (prev[i - bytesPerPixel] ?? 0) : 0;
+                let val: number;
+                switch (filterType) {
+                    case 0: val = x; break;
+                    case 1: val = (x + a) & 0xFF; break;
+                    case 2: val = (x + b2) & 0xFF; break;
+                    case 3: val = (x + Math.floor((a + b2) / 2)) & 0xFF; break;
+                    case 4: {
+                        const p = a + b2 - c;
+                        const pa = Math.abs(p - a), pb = Math.abs(p - b2), pc = Math.abs(p - c);
+                        val = (x + (pa <= pb && pa <= pc ? a : pb <= pc ? b2 : c)) & 0xFF;
+                        break;
+                    }
+                    default: val = x;
+                }
+                out[outPos + i] = val;
+            }
+            outPos += bytesPerRow;
+        }
+        return out.slice(0, outPos);
+    }
+
+    /** Resuelve la paleta de un colorspace Indexed buscando el objeto de referencia. */
+    private static resolvePalette(objRef: string, raw: string, buffer: Buffer): Buffer | null {
+        try {
+            const [objNum] = objRef.split(' ').map(Number);
+            const marker = `\n${objNum} 0 obj`;
+            const objStart = raw.indexOf(marker);
+            if (objStart === -1) return null;
+
+            const streamStart = raw.indexOf('stream', objStart);
+            if (streamStart === -1 || streamStart - objStart > 500) return null;
+
+            const dictSnippet = raw.slice(objStart, streamStart);
+            const isFlateDecode = dictSnippet.includes('FlateDecode');
+
+            // Permissive stream start: skip 'stream' + any whitespace until '\n'
+            let dataStart = streamStart + 6;
+            while (dataStart < raw.length && raw[dataStart] !== '\n') dataStart++;
+            dataStart++; // skip '\n'
+
+            const endStream = raw.indexOf('endstream', dataStart);
+            const paletteStream = buffer.slice(dataStart, endStream);
+
+            const palette = isFlateDecode ? inflateSync(paletteStream) : paletteStream;
+            console.log(`[QR] Paleta objeto ${objNum}: ${palette.length} bytes, primeros RGB: [${palette[0]},${palette[1]},${palette[2]}] [${palette[3]},${palette[4]},${palette[5]}] [${palette[6]},${palette[7]},${palette[8]}]`);
+            return palette;
+        } catch (err: any) {
+            console.warn('[QR] Error resolviendo paleta:', err.message);
+            return null;
+        }
+    }
+
+    /**
+     * Recorre el PDF binario y extrae todas las entradas de imagen (XObject /Image)
+     * con filtros DCTDecode o FlateDecode, junto con sus metadatos.
+     */
+    private static extractPdfImageEntries(raw: string, buffer: Buffer): PdfImageEntry[] {
+        const results: PdfImageEntry[] = [];
+        let pos = 0;
+        let imgIdx = 0;
+
+        while (true) {
+            // Handle both "/Subtype /Image" (with space) and "/Subtype/Image" (no space)
+            const idx1 = raw.indexOf('/Subtype /Image', pos);
+            const idx2 = raw.indexOf('/Subtype/Image', pos);
+            let idx: number;
+            if (idx1 === -1 && idx2 === -1) break;
+            else if (idx1 === -1) idx = idx2;
+            else if (idx2 === -1) idx = idx1;
+            else idx = Math.min(idx1, idx2);
+            pos = idx + 1;
+            imgIdx++;
+
+            const streamKwIdx = raw.indexOf('stream', idx);
+            if (streamKwIdx === -1 || streamKwIdx - idx > 2000) {
+                console.log(`[QR] Img#${imgIdx}: sin 'stream' en 2000 chars`);
+                continue;
+            }
+
+            // Skip 'endstream' false positives: the char before 'stream' must not be 'd'
+            if (raw[streamKwIdx - 1] === 'd') {
+                console.log(`[QR] Img#${imgIdx}: 'stream' es parte de 'endstream', saltando`);
+                continue;
+            }
+
+            const dict = raw.slice(idx, streamKwIdx);
+            const isDct   = dict.includes('DCTDecode');
+            const isFlate = !isDct && dict.includes('FlateDecode');
+            if (!isDct && !isFlate) {
+                // Log the filter so we know what we're missing
+                const filterMatch = dict.match(/\/Filter\s*(\S+)/);
+                console.log(`[QR] Img#${imgIdx}: filtro no soportado (${filterMatch?.[1] ?? 'ninguno'})`);
+                continue;
+            }
+
+            const wm = dict.match(/\/Width\s+(\d+)/);
+            const hm = dict.match(/\/Height\s+(\d+)/);
+            const width  = wm ? parseInt(wm[1], 10) : 0;
+            const height = hm ? parseInt(hm[1], 10) : 0;
+            if (width < 50 || height < 50) {
+                console.log(`[QR] Img#${imgIdx}: muy pequeña ${width}×${height}, saltando`);
+                continue;
+            }
+
+            // Permissive stream start: skip 'stream' keyword + any whitespace until '\n'
+            let dataStart = streamKwIdx + 6; // skip the word 'stream'
+            while (dataStart < raw.length && raw[dataStart] !== '\n') dataStart++;
+            dataStart++; // skip '\n'
+
+            const endStreamIdx = raw.indexOf('endstream', dataStart);
+            if (endStreamIdx === -1) {
+                console.log(`[QR] Img#${imgIdx}: sin 'endstream'`);
+                continue;
+            }
+
+            const stream = buffer.slice(dataStart, endStreamIdx);
+
+            if (isDct) {
+                if (stream[0] === 0xFF && stream[1] === 0xD8) {
+                    results.push({ stream, width, height, filter: 'dct', bpc: 8, channels: 3, predictor: 0, paletteRef: null });
+                }
+            } else {
+                // FlateDecode: leer metadatos adicionales
+                const bpcMatch = dict.match(/\/BitsPerComponent\s+(\d+)/);
+                const bpc = bpcMatch ? parseInt(bpcMatch[1], 10) : 8;
+
+                // Predictor (PNG sub-filters)
+                const predMatch = dict.match(/\/Predictor\s+(\d+)/);
+                const predictor = predMatch ? parseInt(predMatch[1], 10) : 1;
+
+                // ColorSpace: puede ser directo (/DeviceGray, /DeviceRGB) o referencia (n 0 R)
+                const csMatch = dict.match(/\/ColorSpace\s+(\d+\s+\d+\s+R|\/\w+)/);
+                let paletteRef: string | null = null;
+                let channels = 1;
+
+                if (csMatch) {
+                    const cs = csMatch[1];
+                    if (cs.match(/^\d/)) {
+                        // Referencia a objeto — puede ser Indexed
+                        const csObjNum = cs.split(' ')[0];
+                        const csObjMarker = `\n${csObjNum} 0 obj`;
+                        const csObjStart = raw.indexOf(csObjMarker);
+                        if (csObjStart !== -1) {
+                            const csEnd = raw.indexOf('endobj', csObjStart);
+                            const csContent = raw.slice(csObjStart, csEnd);
+                            // [ /Indexed /DeviceRGB 255 <paletteRef 0 R> ]
+                            const indexedMatch = csContent.match(/\/Indexed[\s\S]*?(\d+\s+\d+\s+R)/);
+                            if (indexedMatch) {
+                                paletteRef = indexedMatch[1];
+                                channels = 1; // indexed = 1 byte per pixel
+                            } else if (csContent.includes('DeviceRGB')) {
+                                channels = 3;
+                            }
+                        }
+                    } else if (cs.includes('DeviceRGB')) {
+                        channels = 3;
+                    }
+                }
+
+                results.push({ stream, width, height, filter: 'flate', bpc, channels, predictor, paletteRef });
+            }
+        }
+
+        return results;
     }
 
     /**
@@ -264,10 +677,10 @@ export class QRExtractor {
             console.log('[QR] QR decodificado desde imagen:', qrText.substring(0, 80));
 
             const match = qrText.match(
-                /https?:\/\/(?:www\.)?afip\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i,
+                /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_-]+)/i,
             );
             if (!match) {
-                console.log('[QR] El QR no es de AFIP, se ignora');
+                console.log('[QR] El QR no es de AFIP/ARCA, se ignora');
                 return null;
             }
 
@@ -305,9 +718,11 @@ export class QRExtractor {
     private static parseAfipBase64(base64: string): Partial<InvoiceData> | null {
         let json: string;
         try {
-            // La URL usa base64 URL-safe (reemplaza + y / con - y _)
-            // Node.js Buffer.from maneja ambas variantes
-            json = Buffer.from(base64.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf-8');
+            // Algunos generadores de QR insertan \r\n cada 76 chars (MIME base64).
+            // Hay que eliminar todo whitespace antes de decodificar.
+            // También soporta base64 URL-safe (- → +, _ → /).
+            const clean = base64.replace(/[\r\n\s]/g, '').replace(/-/g, '+').replace(/_/g, '/');
+            json = Buffer.from(clean, 'base64').toString('utf-8');
         } catch {
             return null;
         }

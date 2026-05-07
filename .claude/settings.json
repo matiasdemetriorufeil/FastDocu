@@ -10,7 +10,42 @@
       "Read(//c/Users/demet/OneDrive/**)",
       "Bash(node -e \"require\\('@napi-rs/canvas'\\); console.log\\('OK'\\)\")",
       "Bash(node -e ' *)",
-      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\('name:',d.name,'\\\\ndeps:',Object.keys\\({...d.dependencies,...d.devDependencies}\\).join\\(', '\\)\\)\")"
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('/dev/stdin','utf8'\\)\\); console.log\\('name:',d.name,'\\\\ndeps:',Object.keys\\({...d.dependencies,...d.devDependencies}\\).join\\(', '\\)\\)\")",
+      "Read(//c/Users/demet/**)",
+      "Bash(node -e \"const {createCanvas} = require\\('@napi-rs/canvas'\\); console.log\\('OK'\\); const c = createCanvas\\(10,10\\); c.toBuffer\\('image/png'\\); console.log\\('toBuffer OK'\\);\")",
+      "Bash(node -e \"require\\('sharp'\\); console.log\\('sharp OK'\\);\")",
+      "Bash(node -e \"require\\('puppeteer'\\); console.log\\('puppeteer OK'\\)\")",
+      "Bash(node -e \"require\\('playwright'\\); console.log\\('playwright OK'\\)\")",
+      "Bash(node -e \"require\\('canvas'\\); console.log\\('canvas \\(node-canvas\\) OK', require\\('canvas/package.json'\\).version\\)\")",
+      "Read(//c/Program Files/**)",
+      "Read(//c/Program Files \\(x86\\)/**)",
+      "Bash(where.exe gswin64c *)",
+      "Bash(where.exe gs *)",
+      "Bash(node -e \"require\\('mupdf'\\); console.log\\('mupdf OK'\\)\")",
+      "Bash(node -e \"require\\('@mupdf/mupdf'\\); console.log\\('mupdf OK'\\)\")",
+      "Bash(node -e \"require\\('pdfjs-dist'\\); console.log\\(require\\('pdfjs-dist/package.json'\\).version\\)\")",
+      "Bash(curl -s http://localhost:3000)",
+      "Bash(dir /s /b \"*.pdf\")",
+      "Bash(dir \"C:\\\\Users\\\\demet\\\\Downloads\\\\*.pdf\" /b)",
+      "Bash(dir \"C:\\\\Users\\\\demet\\\\Desktop\\\\*.pdf\" /b)",
+      "Bash(dir \"C:\\\\Users\\\\demet\\\\OneDrive\\\\Desktop\\\\*.pdf\" /b)",
+      "Bash(copy \"C:\\\\Users\\\\demet\\\\Downloads\\\\FE_FACT.\\(C\\) 00006-00004099-ORIGINAL \\(1\\) \\(2\\).pdf\" \"C:\\\\Users\\\\demet\\\\OneDrive\\\\Desktop\\\\FastDocu\\\\test_griguol.pdf\")",
+      "Bash(node test_griguol.cjs test_griguol.pdf)",
+      "Bash(node -e \"try{require\\('@napi-rs/canvas'\\);console.log\\('napi-rs/canvas OK'\\)}catch\\(e\\){console.log\\('NO napi-rs/canvas:',e.message\\)}\")",
+      "Bash(node -e \"try{require\\('canvas'\\);console.log\\('canvas OK'\\)}catch\\(e\\){console.log\\('NO canvas:',e.message\\)}\")",
+      "Bash(node -e \"try{require\\('sharp'\\);console.log\\('sharp OK'\\)}catch\\(e\\){console.log\\('NO sharp:',e.message\\)}\")",
+      "Bash(node test_vector_qr2.cjs test_griguol.pdf)",
+      "Bash(node test_vector_qr3.cjs test_griguol.pdf)",
+      "Bash(node test_vector_qr3.cjs \"C:\\\\Users\\\\demet\\\\Downloads\\\\FE_FACT.\\(C\\) 00006-00004099-ORIGINAL \\(1\\) \\(2\\).pdf\")",
+      "Bash(node test_vector_qr3.cjs \"C:/Users/demet/Downloads/FE_FACT.\\(C\\) 00006-00004099-ORIGINAL \\(1\\) \\(2\\).pdf\")",
+      "Bash(netstat -ano)",
+      "Bash(cat \"c:/Users/demet/OneDrive/Desktop/FastDocu/qre_debug.log\")",
+      "Bash(rm -f qre_debug.log)",
+      "Bash(cat qre_debug.log)",
+      "Bash(node test_vector_qr3.cjs \"C:/Users/demet/Downloads/23292540159_011_00001_00000272.pdf\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\demet\\Downloads"
     ]
   }
 }
