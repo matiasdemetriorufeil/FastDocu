@@ -73,7 +73,7 @@ export class FastDocuOCR {
             }
 
             if (!output.invoice.cuit_emisor && !output.invoice.total) {
-                output.detalle = 'No se pudo extraer información de la factura.';
+                output.detalle = 'No se pudo extraer información de la factura. Si es un PDF escaneado, intentá subir la imagen JPG/PNG directamente.';
                 return output;
             }
 
@@ -146,9 +146,8 @@ export class FastDocuOCR {
             output.texto_extraido = nativeText;
             console.log(`[OCR] PDF: texto extraído (${nativeText.length} chars)`);
         } catch (err: any) {
-            console.warn('[OCR] PDF sin texto nativo:', err.message);
-            output.detalle = err.message;
-            return { qrData: null, qrSource: null };
+            console.warn('[OCR] Error extrayendo texto del PDF, continuando con estrategias de imagen:', err.message);
+            // No retornar — las estrategias D/E pueden extraer el QR de imágenes embebidas
         }
 
         // ── Estrategia A: URL o barcode en el texto extraído ──────────────────
@@ -196,6 +195,19 @@ export class FastDocuOCR {
         if (inlineQr) {
             output.invoice = this.mergeWithQr(InvoiceParser.parse(nativeText), inlineQr.data);
             return { qrData: inlineQr.data, qrSource: inlineQr.source };
+        }
+
+        // ── Estrategia F: OCR Tesseract sobre páginas del PDF escaneado ──────────
+        // Se activa cuando no hay texto nativo ni QR. Usa pdfjs para obtener
+        // las imágenes de página y corre Tesseract sobre cada una.
+        if (!nativeText) {
+            console.log('[OCR] PDF escaneado sin QR → OCR Tesseract en páginas...');
+            const scanned = await this.extractOcrFromScannedPdf(buffer, output);
+            if (scanned.qrData) {
+                output.invoice = this.mergeWithQr(InvoiceParser.parse(scanned.text ?? ''), scanned.qrData);
+                return { qrData: scanned.qrData, qrSource: scanned.qrSource };
+            }
+            if (scanned.text) nativeText = scanned.text;
         }
 
         // ── Fallback final: solo regex sobre el texto ─────────────────────────
@@ -250,6 +262,124 @@ export class FastDocuOCR {
                 Object.entries(qr).filter(([, v]) => v !== null && v !== undefined),
             ),
         } as InvoiceData;
+    }
+
+    // ── Estrategia F: OCR Tesseract en PDFs escaneados ───────────────────────
+
+    /**
+     * Usa pdfjs para obtener las imágenes XObject de cada página.
+     * Para cada imagen intenta: (1) QR via Jimp→jsqr, (2) OCR Tesseract.
+     * Activa solo cuando no hay texto nativo ni QR en las estrategias A-E.
+     */
+    private async extractOcrFromScannedPdf(
+        buffer: Buffer,
+        output: ValidationOutput,
+    ): Promise<{ text: string | null; qrData: Partial<InvoiceData> | null; qrSource: QrSource }> {
+        try {
+            const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+            const pdfjsLib = (pdfjs as any).default ?? pdfjs;
+            const OPS = pdfjsLib.OPS ?? {};
+            const OP_xobj = OPS.paintImageXObject ?? 85;
+
+            const doc = await (pdfjsLib as any).getDocument({
+                data: new Uint8Array(buffer),
+                useSystemFonts: true,
+            }).promise;
+
+            const Jimp = await import('jimp').then(m => m.default ?? m);
+            const allTexts: string[] = [];
+
+            for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+                const page = await doc.getPage(pageNum);
+
+                let opList: any;
+                try {
+                    opList = await Promise.race([
+                        page.getOperatorList(),
+                        new Promise<never>((_, reject) =>
+                            setTimeout(() => reject(new Error('timeout')), 15000),
+                        ),
+                    ]);
+                } catch (e: any) {
+                    console.warn(`[OCR PDF] Página ${pageNum} saltada: ${e.message}`);
+                    continue;
+                }
+
+                const xobjNames = new Set<string>();
+                for (let i = 0; i < opList.fnArray.length; i++) {
+                    if (opList.fnArray[i] === OP_xobj) {
+                        const name = opList.argsArray[i]?.[0];
+                        if (name && typeof name === 'string') xobjNames.add(name);
+                    }
+                }
+
+                for (const name of xobjNames) {
+                    const imgData: any = await Promise.race([
+                        new Promise<any>((resolve) => {
+                            page.objs.get(name, (d: any) => resolve(d ?? null));
+                        }),
+                        new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000)),
+                    ]);
+
+                    if (!imgData?.data || !imgData.width || !imgData.height) continue;
+                    if (imgData.width < 200 || imgData.height < 200) continue;
+
+                    console.log(`[OCR PDF] Convirtiendo imagen ${imgData.width}×${imgData.height} → PNG...`);
+                    const pngBuffer = await this.pdfjsImageToPng(Jimp, imgData);
+                    if (!pngBuffer) continue;
+
+                    // Intentar QR via Jimp.read → jsqr (distinto al camino raw-pixels de estrategia E)
+                    try {
+                        const qrData = await QRExtractor.extractFromImage(pngBuffer);
+                        if (qrData) {
+                            console.log(`[OCR PDF] QR AFIP encontrado vía Jimp en página ${pageNum}`);
+                            output.texto_extraido = allTexts.join('\n\n');
+                            return { text: allTexts.join('\n\n') || null, qrData, qrSource: 'image_scan' };
+                        }
+                    } catch { /* continuar si falla */ }
+
+                    try {
+                        const text = await DocumentExtractor.extractText(pngBuffer, 'image/png');
+                        if (text && text.trim().length > 20) {
+                            console.log(`[OCR PDF] Página ${pageNum}: ${text.length} chars extraídos`);
+                            allTexts.push(text);
+                        }
+                    } catch (e: any) {
+                        console.warn(`[OCR PDF] Tesseract error en página ${pageNum}:`, e.message);
+                    }
+                }
+            }
+
+            if (allTexts.length > 0) {
+                const combined = allTexts.join('\n\n');
+                output.texto_extraido = combined;
+
+                // Si el OCR extrajo los campos críticos, derivar qrData para activar has_qr=true
+                const parsed = InvoiceParser.parse(combined);
+                if (parsed.cuit_emisor && parsed.cae && parsed.total) {
+                    const derivedQr: Partial<InvoiceData> = {
+                        tipo_factura: parsed.tipo_factura,
+                        numero_factura: parsed.numero_factura,
+                        fecha_emision: parsed.fecha_emision,
+                        cuit_emisor: parsed.cuit_emisor,
+                        total: parsed.total,
+                        cae: parsed.cae,
+                        fecha_vencimiento_cae: parsed.fecha_vencimiento_cae,
+                    };
+                    console.log('[OCR PDF] Campos críticos extraídos por OCR → qrData derivado (ocr_derived)');
+                    return { text: combined, qrData: derivedQr, qrSource: 'ocr_derived' };
+                }
+
+                return { text: combined, qrData: null, qrSource: null };
+            }
+        } catch (err: any) {
+            console.warn('[OCR PDF] Error en OCR de páginas escaneadas:', err.message);
+        }
+        return { text: null, qrData: null, qrSource: null };
+    }
+
+    private async pdfjsImageToPng(Jimp: any, imgData: any): Promise<Buffer | null> {
+        return QRExtractor.pdfImageToPng(Jimp, imgData.data, imgData.width, imgData.height);
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

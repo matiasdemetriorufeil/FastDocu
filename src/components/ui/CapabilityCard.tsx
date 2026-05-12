@@ -8,10 +8,7 @@ import {
     QrCode,
     BadgeCheck,
     GitMerge,
-    ArrowRight,
-    Sparkles,
 } from 'lucide-react';
-import { cn } from '@/lib/utils';
 import type { Capability, CapabilityStatus } from '@/types';
 
 const iconMap: Record<string, React.ElementType> = {
@@ -23,10 +20,10 @@ const iconMap: Record<string, React.ElementType> = {
     GitMerge,
 };
 
-const statusConfig: Record<CapabilityStatus, { label: string; bg: string; color: string; border: string }> = {
-    activo: { label: 'Activo', bg: '#dcfce7', color: '#166534', border: '#bbf7d0' },
-    beta: { label: 'Beta', bg: '#e0e7ff', color: '#4338ca', border: '#c7d2fe' },
-    proximo: { label: 'En desarrollo', bg: '#f1f5f9', color: '#64748b', border: '#e2e8f0' },
+const statusConfig: Record<CapabilityStatus, { label: string; bg: string; color: string }> = {
+    activo:  { label: 'Activo',  bg: '#f0fdf4', color: '#15803d' },
+    beta:    { label: 'Beta',    bg: '#eef2ff', color: '#4f46e5' },
+    proximo: { label: 'Próximo', bg: '#f8fafc', color: '#94a3b8' },
 };
 
 interface CapabilityCardProps {
@@ -37,62 +34,60 @@ interface CapabilityCardProps {
 export default function CapabilityCard({ capability, index = 0 }: CapabilityCardProps) {
     const Icon = iconMap[capability.icon] ?? ShieldCheck;
     const status = statusConfig[capability.status];
-    const isActive = capability.status === 'activo' || capability.status === 'beta';
+    const isActive = capability.status !== 'proximo';
 
     return (
         <motion.div
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: index * 0.05, duration: 0.4, ease: 'easeOut' }}
-            className={cn(
-                'group relative rounded-2xl p-6 transition-all duration-300 border',
-                isActive ? 'bg-white premium-shadow hover:premium-shadow-hover hover:-translate-y-1 cursor-pointer' : 'bg-slate-50/50 grayscale-[20%]'
-            )}
-            style={{ borderColor: isActive ? 'var(--border)' : 'var(--border-soft)' }}
+            initial={{ opacity: 0, x: -4 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: index * 0.04, duration: 0.28, ease: 'easeOut' }}
+            className={`flex items-center gap-4 rounded-xl px-5 py-4 transition-all duration-150 ${
+                isActive ? 'bg-white hover:-translate-y-px' : 'bg-[#fafafa]'
+            }`}
+            style={{
+                border: `1px solid ${isActive ? 'var(--border)' : '#f1f3f5'}`,
+                boxShadow: isActive ? '0 1px 2px rgba(0,0,0,0.03)' : 'none',
+            }}
+            onMouseEnter={isActive ? (e) => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.07)';
+                (e.currentTarget as HTMLElement).style.borderColor = '#e0e7ff';
+            } : undefined}
+            onMouseLeave={isActive ? (e) => {
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 2px rgba(0,0,0,0.03)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+            } : undefined}
         >
-            {/* Glow effect on hover */}
-            {isActive && (
-                <div className="absolute inset-0 bg-gradient-to-br from-indigo-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity rounded-2xl pointer-events-none" />
-            )}
-
-            {/* Status chip */}
-            <span
-                className="absolute top-5 right-5 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider border"
-                style={{ background: status.bg, color: status.color, borderColor: status.border }}
-            >
-                {status.label}
-            </span>
-
-            {/* Icon */}
             <div
-                className={cn(
-                    "mb-5 flex h-14 w-14 items-center justify-center rounded-[18px] transition-transform duration-300 group-hover:scale-110",
-                    isActive ? "bg-indigo-50 border border-indigo-100" : "bg-slate-100 border border-slate-200"
-                )}
+                className="flex h-10 w-10 items-center justify-center rounded-xl flex-shrink-0"
+                style={{ background: isActive ? '#eef2ff' : '#f1f3f5' }}
             >
                 <Icon
-                    className="h-6 w-6"
-                    style={{ color: isActive ? 'var(--accent)' : 'var(--text-muted)' }}
+                    className="h-5 w-5"
+                    style={{ color: isActive ? 'var(--accent)' : '#d1d5db' }}
                 />
             </div>
 
-            <h3
-                className="font-bold text-lg mb-2"
-                style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
-            >
-                {capability.title}
-            </h3>
-            <p className="text-sm leading-relaxed" style={{ color: isActive ? 'var(--text-secondary)' : 'var(--text-muted)' }}>
-                {capability.description}
-            </p>
+            <div className="flex-1 min-w-0">
+                <p
+                    className="text-[15px] font-semibold leading-snug truncate"
+                    style={{ color: isActive ? 'var(--text-primary)' : 'var(--text-muted)' }}
+                >
+                    {capability.title}
+                </p>
+                <p
+                    className="text-[13px] leading-snug truncate mt-0.5"
+                    style={{ color: isActive ? 'var(--text-secondary)' : '#cbd5e1' }}
+                >
+                    {capability.description}
+                </p>
+            </div>
 
-            {isActive && (
-                <div className="mt-5 flex items-center gap-1.5 text-sm font-bold opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300" style={{ color: 'var(--accent)' }}>
-                    <Sparkles className="h-4 w-4" />
-                    <span>Configurar módulo</span>
-                    <ArrowRight className="h-4 w-4 ml-0.5" />
-                </div>
-            )}
+            <span
+                className="text-[12px] font-semibold rounded-full px-3 py-1 flex-shrink-0"
+                style={{ background: status.bg, color: status.color }}
+            >
+                {status.label}
+            </span>
         </motion.div>
     );
 }

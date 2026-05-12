@@ -10,21 +10,20 @@ import {
     AlertTriangle,
     Archive,
     Settings,
-    Sparkles,
     FileCheck2,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 const navItems = [
-    { label: 'Inbox', href: '/inbox', icon: Inbox, badge: 4 },
-    { label: 'Pendientes', href: '/documents?status=pendiente', icon: Clock, badge: 3 },
-    { label: 'Aprobados', href: '/documents?status=aprobado', icon: CheckCircle2 },
-    { label: 'A Revisar', href: '/documents?status=revisar', icon: AlertTriangle, badge: 2 },
-    { label: 'Archivados', href: '/documents?status=archivado', icon: Archive },
-    { label: 'Configuración', href: '/settings', icon: Settings },
+    { label: 'Inbox',        href: '/inbox',                         icon: Inbox,         badge: 4 },
+    { label: 'Pendientes',   href: '/documents?status=pendiente',    icon: Clock,         badge: 3 },
+    { label: 'Aprobados',    href: '/documents?status=aprobado',     icon: CheckCircle2              },
+    { label: 'A Revisar',    href: '/documents?status=revisar',      icon: AlertTriangle, badge: 2 },
+    { label: 'Archivados',   href: '/documents?status=archivado',    icon: Archive                   },
+    { label: 'Configuración',href: '/settings',                      icon: Settings                  },
 ];
 
-const SIDEBAR_BG = '#0f172a';
+const SIDEBAR_BG     = '#0f172a';
 const SIDEBAR_BORDER = 'rgba(255,255,255,0.06)';
 
 export default function Sidebar() {
@@ -37,7 +36,7 @@ export default function Sidebar() {
 
     return (
         <aside
-            className="flex h-full w-[248px] flex-shrink-0 flex-col z-20"
+            className="flex h-full w-[240px] flex-shrink-0 flex-col z-20"
             style={{ background: SIDEBAR_BG, borderRight: `1px solid ${SIDEBAR_BORDER}` }}
         >
             {/* Logo */}
@@ -57,7 +56,7 @@ export default function Sidebar() {
                     </p>
                     <p
                         className="text-[10px] font-medium uppercase tracking-widest leading-none"
-                        style={{ color: 'rgba(255,255,255,0.3)' }}
+                        style={{ color: 'rgba(255,255,255,0.28)' }}
                     >
                         Enterprise
                     </p>
@@ -74,15 +73,14 @@ export default function Sidebar() {
                                 whileHover={{ x: 2 }}
                                 transition={{ type: 'spring', stiffness: 500, damping: 35 }}
                                 className={cn(
-                                    'group relative flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium cursor-pointer transition-colors',
-                                    active ? '' : 'hover:bg-white/[0.04]'
+                                    'group relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium cursor-pointer transition-colors',
+                                    active ? '' : 'hover:bg-white/[0.04]',
                                 )}
                                 style={{
                                     background: active ? 'rgba(255,255,255,0.07)' : 'transparent',
                                     color: active ? 'rgba(255,255,255,0.92)' : 'rgba(255,255,255,0.42)',
                                 }}
                             >
-                                {/* Left active indicator */}
                                 {active && (
                                     <div
                                         className="absolute inset-y-2 left-0 w-[3px] rounded-r-full"
@@ -95,7 +93,7 @@ export default function Sidebar() {
                                         'h-4 w-4 flex-shrink-0 transition-colors',
                                         active
                                             ? 'text-indigo-400'
-                                            : 'text-white/30 group-hover:text-white/55'
+                                            : 'text-white/30 group-hover:text-white/55',
                                     )}
                                 />
                                 <span className="flex-1 truncate">{item.label}</span>
@@ -121,64 +119,25 @@ export default function Sidebar() {
                 })}
             </nav>
 
-            {/* Bottom section */}
+            {/* Bottom */}
             <div
-                className="px-3 pb-4 pt-3 border-t"
+                className="px-3 pb-4 pt-3 border-t flex flex-col gap-1"
                 style={{ borderColor: SIDEBAR_BORDER }}
             >
-                {/* AI Copilot */}
-                <div
-                    className="rounded-xl px-4 py-4 mb-3 cursor-pointer"
-                    style={{
-                        background: 'rgba(79,70,229,0.1)',
-                        border: '1px solid rgba(99,102,241,0.18)',
-                    }}
-                >
-                    <div className="flex items-center gap-2 mb-1.5">
-                        <Sparkles className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
-                        <span className="text-sm font-semibold text-white">IA Copilot</span>
-                    </div>
-                    <p
-                        className="text-xs leading-relaxed mb-3"
-                        style={{ color: 'rgba(255,255,255,0.4)' }}
-                    >
-                        Conciliación automática con inteligencia artificial.
-                    </p>
-                    <button
-                        className="w-full rounded-lg py-1.5 text-xs font-semibold transition-colors"
-                        style={{
-                            border: '1px solid rgba(99,102,241,0.3)',
-                            color: 'rgba(165,180,252,0.9)',
-                            background: 'transparent',
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'rgba(99,102,241,0.12)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'transparent';
-                        }}
-                    >
-                        Saber más
-                    </button>
-                </div>
-
-                {/* User card */}
-                <div
-                    className="flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors"
-                    onMouseEnter={(e) => {
-                        e.currentTarget.style.background = 'rgba(255,255,255,0.04)';
-                    }}
-                    onMouseLeave={(e) => {
-                        e.currentTarget.style.background = 'transparent';
-                    }}
+                {/* User */}
+                <button
+                    className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg cursor-pointer transition-colors text-left"
+                    onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)'; }}
+                    onMouseLeave={(e) => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                    style={{ background: 'transparent' }}
                 >
                     <div
-                        className="h-8 w-8 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0 relative"
+                        className="h-7 w-7 rounded-lg flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 relative"
                         style={{ background: '#3451b2' }}
                     >
                         LM
                         <span
-                            className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 bg-emerald-400 rounded-full border-2"
+                            className="absolute -bottom-0.5 -right-0.5 h-2 w-2 bg-emerald-400 rounded-full border-2"
                             style={{ borderColor: SIDEBAR_BG }}
                         />
                     </div>
@@ -194,10 +153,10 @@ export default function Sidebar() {
                         </p>
                     </div>
                     <Settings
-                        className="h-3.5 w-3.5 flex-shrink-0 opacity-30"
-                        style={{ color: 'white' }}
+                        className="h-3.5 w-3.5 flex-shrink-0"
+                        style={{ color: 'rgba(255,255,255,0.25)' }}
                     />
-                </div>
+                </button>
             </div>
         </aside>
     );

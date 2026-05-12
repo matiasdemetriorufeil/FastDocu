@@ -79,8 +79,8 @@ export class DocumentExtractor {
         const fullText = allLines.join('\n');
 
         if (!fullText || fullText.trim().length < 10) {
-            console.warn('[Extractor PDF] El PDF no contiene texto nativo. Es probablemente un escaneo.');
-            throw new Error('El PDF no contiene texto digital. Subí la factura como imagen (JPG/PNG) para usar OCR.');
+            console.warn('[Extractor PDF] El PDF no contiene texto nativo (posiblemente escaneado). Continuando con extracción de imágenes.');
+            return '';
         }
 
         console.log(`[Extractor PDF] Texto extraído: ${fullText.length} caracteres`);

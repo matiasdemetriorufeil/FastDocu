@@ -13,7 +13,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             <Sidebar />
             <div className="flex flex-1 flex-col overflow-hidden">
                 <Header onUpload={() => setIsUploadOpen(true)} />
-                <main className="flex-1 overflow-y-auto p-8">
+
+                <main className="flex-1 overflow-y-auto px-7 py-6">
                     {children}
                 </main>
             </div>

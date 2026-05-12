@@ -35,38 +35,94 @@ const typeLabelMap: Record<DocumentType, string> = {
 interface DocumentCardProps {
     document: Document;
     index?: number;
+    compact?: boolean;
+    onApprove?: () => void;
 }
 
-export default function DocumentCard({ document: doc, index = 0 }: DocumentCardProps) {
+export default function DocumentCard({ document: doc, index = 0, compact = false, onApprove }: DocumentCardProps) {
     const Icon = typeIconMap[doc.type];
     const fechaFormatted = formatDate(doc.fecha.split('T')[0]);
+
+    if (compact) {
+        return (
+            <motion.div
+                initial={{ opacity: 0, x: -6 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: index * 0.04, duration: 0.28, ease: 'easeOut' }}
+                className="group flex items-center gap-3 rounded-xl bg-white px-4 py-3 transition-all duration-150 cursor-pointer hover:-translate-y-px"
+                style={{
+                    border: '1px solid var(--border)',
+                    boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                }}
+                onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLElement).style.boxShadow = '0 4px 12px rgba(0,0,0,0.06)';
+                    (e.currentTarget as HTMLElement).style.borderColor = '#d1d5db';
+                }}
+                onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 2px rgba(0,0,0,0.03)';
+                    (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
+                }}
+            >
+                <div
+                    className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg transition-colors group-hover:bg-indigo-50"
+                    style={{ background: '#f3f4f6' }}
+                >
+                    <Icon className="h-[14px] w-[14px]" style={{ color: 'var(--text-muted)' }} />
+                </div>
+
+                <div className="flex-1 min-w-0">
+                    <p
+                        className="text-[14px] font-semibold truncate leading-snug"
+                        style={{ color: 'var(--text-primary)' }}
+                    >
+                        {doc.proveedor}
+                    </p>
+                    <p className="text-[12px] leading-snug truncate" style={{ color: 'var(--text-muted)' }}>
+                        {typeLabelMap[doc.type]}{doc.tipoLetra && ` ${doc.tipoLetra}`}
+                        <span className="mx-1 opacity-40">·</span>
+                        {doc.puntoVenta}-{doc.numeroComprobante}
+                        <span className="mx-1 opacity-40">·</span>
+                        {fechaFormatted}
+                    </p>
+                </div>
+
+                <div className="flex items-center gap-2.5 flex-shrink-0">
+                    <span
+                        className="text-[14px] font-bold"
+                        style={{ color: 'var(--text-primary)' }}
+                    >
+                        {formatCurrency(doc.total, doc.moneda)}
+                    </span>
+                    <StatusBadge status={doc.status} size="sm" />
+                </div>
+            </motion.div>
+        );
+    }
 
     return (
         <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.04, duration: 0.3, ease: 'easeOut' }}
-            className="group relative flex flex-col rounded-xl bg-white border transition-all duration-200 hover:-translate-y-[1px]"
-            style={{ borderColor: 'var(--border)' }}
+            className="group relative flex flex-col rounded-2xl bg-white transition-all duration-200 hover:-translate-y-px"
+            style={{
+                border: '1px solid var(--border)',
+                boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+            }}
             onMouseEnter={(e) => {
-                const el = e.currentTarget as HTMLElement;
-                el.style.boxShadow = '0 4px 16px rgba(0,0,0,0.07)';
-                el.style.borderColor = '#d1d5db';
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 6px 16px rgba(0,0,0,0.07)';
+                (e.currentTarget as HTMLElement).style.borderColor = '#d1d5db';
             }}
             onMouseLeave={(e) => {
-                const el = e.currentTarget as HTMLElement;
-                el.style.boxShadow = '';
-                el.style.borderColor = 'var(--border)';
+                (e.currentTarget as HTMLElement).style.boxShadow = '0 1px 3px rgba(0,0,0,0.04)';
+                (e.currentTarget as HTMLElement).style.borderColor = 'var(--border)';
             }}
         >
-            {/* Body */}
             <div className="p-5 flex flex-col gap-4 flex-1">
-
-                {/* Top: icon + identification + status badge */}
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-start gap-3 min-w-0">
                         <div
-                            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors group-hover:bg-slate-100"
+                            className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg transition-colors group-hover:bg-indigo-50"
                             style={{ background: '#f3f4f6' }}
                         >
                             <Icon
@@ -97,34 +153,26 @@ export default function DocumentCard({ document: doc, index = 0 }: DocumentCardP
                     <StatusBadge status={doc.status} size="sm" />
                 </div>
 
-                {/* Info row: CUIT · Fecha · Total */}
                 <div className="grid grid-cols-3 gap-3">
                     <InfoCol label="CUIT" value={doc.cuit || '—'} />
                     <InfoCol label="Fecha" value={fechaFormatted} />
-                    <InfoCol
-                        label="Total"
-                        value={formatCurrency(doc.total, doc.moneda)}
-                        strong
-                    />
+                    <InfoCol label="Total" value={formatCurrency(doc.total, doc.moneda)} strong />
                 </div>
 
-                {/* OC badge (optional) */}
                 {doc.ordenDeCompra && (
                     <div
-                        className="rounded-lg px-3 py-2 text-xs font-medium border"
+                        className="rounded-lg px-3 py-2 text-xs font-medium"
                         style={{
                             background: '#f0f9ff',
                             color: '#0369a1',
-                            borderColor: '#bae6fd',
+                            border: '1px solid #bae6fd',
                         }}
                     >
-                        OC:{' '}
-                        <span className="font-semibold">{doc.ordenDeCompra}</span>
+                        OC: <span className="font-semibold">{doc.ordenDeCompra}</span>
                     </div>
                 )}
             </div>
 
-            {/* Actions */}
             <div
                 className="flex items-center gap-2 px-5 py-3 border-t"
                 style={{ borderColor: 'var(--border-soft)' }}
@@ -138,8 +186,9 @@ export default function DocumentCard({ document: doc, index = 0 }: DocumentCardP
                     </button>
                 </Link>
 
-                {doc.status !== 'aprobado' && (
+                {doc.status !== 'aprobado' && onApprove && (
                     <button
+                        onClick={onApprove}
                         className="flex items-center gap-1.5 rounded-lg px-3.5 py-2 text-[13px] font-semibold text-white transition-colors"
                         style={{ background: 'var(--accent)' }}
                         onMouseEnter={(e) =>

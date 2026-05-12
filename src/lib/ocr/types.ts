@@ -60,7 +60,7 @@ export interface ApiStatusResponse {
 
 // ─── Reconciliation ──────────────────────────────────────────────────────────
 
-export type QrSource = 'url' | 'barcode' | 'image_scan' | null;
+export type QrSource = 'url' | 'barcode' | 'image_scan' | 'ocr_derived' | null;
 
 export type FieldMatch =
     | 'exact'       // idénticos tras normalizar

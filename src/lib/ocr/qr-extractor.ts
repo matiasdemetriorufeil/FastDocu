@@ -285,6 +285,11 @@ export class QRExtractor {
     static async extractFromPdfInlineImages(
         buffer: Buffer,
     ): Promise<{ data: Partial<InvoiceData>; source: 'image_scan' } | null> {
+        const STRATEGY_TIMEOUT_MS = 40_000; // 40 s máximo para toda la estrategia
+        const PAGE_TIMEOUT_MS     = 15_000; // 15 s por página (getOperatorList)
+        const OBJ_TIMEOUT_MS      =  5_000; // 5 s por imagen XObject
+        const start = Date.now();
+
         try {
             const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
             const pdfjsLib = (pdfjs as any).default ?? pdfjs;
@@ -300,8 +305,26 @@ export class QRExtractor {
             const jsQR = await import('jsqr').then(m => m.default ?? m);
 
             for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
+                if (Date.now() - start > STRATEGY_TIMEOUT_MS) {
+                    console.warn('[QR] Timeout global en estrategia E, abortando');
+                    break;
+                }
+
                 const page = await doc.getPage(pageNum);
-                const opList = await page.getOperatorList();
+
+                // getOperatorList puede colgar en PDFs escaneados con imágenes muy grandes
+                let opList: any;
+                try {
+                    opList = await Promise.race([
+                        page.getOperatorList(),
+                        new Promise<never>((_, reject) =>
+                            setTimeout(() => reject(new Error('getOperatorList timeout')), PAGE_TIMEOUT_MS),
+                        ),
+                    ]);
+                } catch (e: any) {
+                    console.warn(`[QR] Página ${pageNum} saltada: ${e.message}`);
+                    continue;
+                }
 
                 // ── Imágenes inline (Griguol/FPDF legacy — ASCII85+LZW) ──────────
                 for (let i = 0; i < opList.fnArray.length; i++) {
@@ -318,7 +341,6 @@ export class QRExtractor {
                 }
 
                 // ── XObject images (ARCA/AFIP — sin filtro, DeviceGray o RGB) ───
-                // Tras getOperatorList(), las imágenes quedan resueltas en page.objs.
                 const xobjNames = new Set<string>();
                 for (let i = 0; i < opList.fnArray.length; i++) {
                     if (opList.fnArray[i] === OP_xobj) {
@@ -328,15 +350,52 @@ export class QRExtractor {
                 }
 
                 for (const name of xobjNames) {
-                    const imgData: any = await new Promise<any>((resolve) => {
-                        page.objs.get(name, (d: any) => resolve(d ?? null));
-                    });
+                    // page.objs.get puede no llamar su callback si el objeto no se resuelve
+                    const imgData: any = await Promise.race([
+                        new Promise<any>((resolve) => {
+                            page.objs.get(name, (d: any) => resolve(d ?? null));
+                        }),
+                        new Promise<null>((resolve) =>
+                            setTimeout(() => resolve(null), OBJ_TIMEOUT_MS),
+                        ),
+                    ]);
                     if (!imgData?.data || !imgData.width || !imgData.height) continue;
 
-                    const result = this.tryQrFromImageData(jsQR, imgData.data, imgData.width, imgData.height);
+                    const { width: iw, height: ih, data: idata } = imgData;
+                    const dataLen = (idata as any).length;
+                    const detectedCh = dataLen === iw * ih * 4 ? 4 : dataLen === iw * ih * 3 ? 3 : dataLen === iw * ih ? 1 : `raw(${dataLen})`;
+                    console.log(`[QR] XObject ${name}: ${iw}×${ih} kind=${imgData.kind ?? '?'} dataLen=${dataLen} channels=${detectedCh}`);
+
+                    // Intento 1: conversión manual RGBA → jsqr
+                    const result = this.tryQrFromImageData(jsQR, idata, iw, ih);
                     if (result) {
-                        console.log(`[QR] QR AFIP/ARCA en XObject ${name} ${imgData.width}×${imgData.height}`);
+                        console.log(`[QR] QR AFIP/ARCA en XObject ${name} ${iw}×${ih}`);
                         return { data: result, source: 'image_scan' };
+                    }
+
+                    // Intento 2: recodificar a PNG vía Jimp → Jimp.read → jsqr
+                    // El pipeline de Jimp aplica corrección de espacio de color
+                    // y puede producir RGBA más limpio que la conversión manual.
+                    try {
+                        const JimpMod = await import('jimp').then(m => m.default ?? m);
+                        const pngBuf = await this.pdfImageToPng(JimpMod, idata, iw, ih);
+                        if (pngBuf) {
+                            const qrText = await this.scanQrFromImageBuffer(pngBuf);
+                            if (qrText) {
+                                const m = qrText.replace(/[\r\n]/g, '').match(
+                                    /https?:\/\/(?:www\.)?(?:afip|arca)\.gob\.ar\/fe\/qr\/?\?p=([A-Za-z0-9+/=_\-]+)/i,
+                                );
+                                if (m) {
+                                    const data = this.parseAfipBase64(m[1]);
+                                    if (data) {
+                                        console.log(`[QR] QR AFIP/ARCA vía Jimp en XObject ${name}`);
+                                        return { data, source: 'image_scan' };
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e: any) {
+                        console.warn(`[QR] Jimp fallback error en ${name}:`, e.message);
                     }
                 }
             }
@@ -408,8 +467,50 @@ export class QRExtractor {
         return this.parseAfipBase64(match[1]);
     }
 
-    /** Escanea RGBA con jsqr; si falla, reintenta escalando 4x y 8x. */
+    /**
+     * Escanea RGBA con jsqr.
+     *
+     * Para imágenes grandes (páginas escaneadas completas):
+     *  1. Intento directo a resolución completa
+     *  2. Binarizado a resolución completa (elimina artefactos JPEG del escaneo)
+     *  3. Cuadrantes de la página — el QR de AFIP/ARCA está en la zona inferior
+     *     y ocupa solo ~15 % del ancho total; al recortar un cuadrante pasa a
+     *     ocupar ~30 %, lo que mejora mucho la detección con jsqr
+     *  4. Versión reducida a 1200 px (fallback)
+     *
+     * Para imágenes pequeñas (recortes de QR):
+     *  Reintenta escalando 2×, 4× y 8× si el primer intento falla.
+     */
     private static scanQrFromRgba(jsQR: any, rgba: Uint8ClampedArray, w: number, h: number): string | null {
+        const MAX_DIM = 1200;
+
+        if (w > MAX_DIM || h > MAX_DIM) {
+            // 1. Resolución completa
+            const direct = (jsQR as any)(rgba, w, h, { inversionAttempts: 'attemptBoth' });
+            if (direct?.data) return direct.data;
+
+            // 2. Binarizado completo — elimina ruido JPEG que confunde jsqr
+            const binary = this.binarizeRgba(rgba, w, h);
+            const binFull = (jsQR as any)(binary, w, h, { inversionAttempts: 'attemptBoth' });
+            if (binFull?.data) return binFull.data;
+
+            // 3. Cuadrantes — el QR suele estar en la parte inferior (AFIP bottom-right)
+            const tiled = this.scanQrTiled(jsQR, rgba, w, h);
+            if (tiled) return tiled;
+
+            // 4. Fallback reducido
+            const scale = MAX_DIM / Math.max(w, h);
+            const nw = Math.round(w * scale);
+            const nh = Math.round(h * scale);
+            const downscaled = this.nearestNeighborDownscale(rgba, w, h, nw, nh);
+            console.log(`[QR] Downscaling ${w}×${h} → ${nw}×${nh} para jsqr`);
+            const dsResult = (jsQR as any)(downscaled, nw, nh, { inversionAttempts: 'attemptBoth' });
+            if (dsResult?.data) return dsResult.data;
+            const binDs = this.binarizeRgba(downscaled, nw, nh);
+            const binDsResult = (jsQR as any)(binDs, nw, nh, { inversionAttempts: 'attemptBoth' });
+            return binDsResult?.data ?? null;
+        }
+
         const direct = (jsQR as any)(rgba, w, h, { inversionAttempts: 'attemptBoth' });
         if (direct?.data) return direct.data;
 
@@ -432,6 +533,114 @@ export class QRExtractor {
             if (r?.data) return r.data;
         }
         return null;
+    }
+
+    /**
+     * Convierte datos de imagen pdfjs (array de píxeles + dimensiones) a PNG via Jimp.
+     * Necesario para el camino Jimp.read → jsqr que maneja mejor los espacios de color.
+     */
+    static async pdfImageToPng(Jimp: any, data: ArrayLike<number>, w: number, h: number): Promise<Buffer | null> {
+        try {
+            const dataLen: number = (data as any).length;
+            const channels = dataLen === w * h * 4 ? 4 : dataLen === w * h * 3 ? 3 : dataLen === w * h ? 1 : 0;
+            if (channels === 0) return null;
+
+            const img = new (Jimp as any)(w, h, 0x00000000);
+            const bmp: Buffer = img.bitmap.data;
+            for (let i = 0; i < w * h; i++) {
+                if (channels === 4) {
+                    bmp[i * 4]     = (data as any)[i * 4];
+                    bmp[i * 4 + 1] = (data as any)[i * 4 + 1];
+                    bmp[i * 4 + 2] = (data as any)[i * 4 + 2];
+                    bmp[i * 4 + 3] = (data as any)[i * 4 + 3];
+                } else if (channels === 3) {
+                    bmp[i * 4]     = (data as any)[i * 3];
+                    bmp[i * 4 + 1] = (data as any)[i * 3 + 1];
+                    bmp[i * 4 + 2] = (data as any)[i * 3 + 2];
+                    bmp[i * 4 + 3] = 255;
+                } else {
+                    const g = (data as any)[i];
+                    bmp[i * 4] = bmp[i * 4 + 1] = bmp[i * 4 + 2] = g;
+                    bmp[i * 4 + 3] = 255;
+                }
+            }
+            return await img.getBufferAsync('image/png');
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Convierte RGBA a blanco/negro puro (umbral 128).
+     * Elimina artefactos JPEG y ruido de escaneo que confunden jsqr.
+     */
+    private static binarizeRgba(rgba: Uint8ClampedArray, w: number, h: number): Uint8ClampedArray {
+        const out = new Uint8ClampedArray(rgba.length);
+        for (let i = 0; i < w * h; i++) {
+            const gray = rgba[i * 4] * 0.299 + rgba[i * 4 + 1] * 0.587 + rgba[i * 4 + 2] * 0.114;
+            const val = gray > 128 ? 255 : 0;
+            out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = val;
+            out[i * 4 + 3] = 255;
+        }
+        return out;
+    }
+
+    /**
+     * Divide la imagen en cuadrantes y escanea cada uno con jsqr.
+     * El QR de AFIP/ARCA suele estar en la zona inferior del comprobante,
+     * por lo que los cuadrantes inferiores se escanean primero.
+     * También prueba la versión binarizada de cada cuadrante.
+     */
+    private static scanQrTiled(jsQR: any, rgba: Uint8ClampedArray, w: number, h: number): string | null {
+        const hw = Math.floor(w / 2);
+        const hh = Math.floor(h / 2);
+
+        // Orden de prioridad: inferior-derecho (AFIP), inferior-izquierdo, superior-derecho, superior-izquierdo
+        const offsets: Array<[number, number]> = [[hw, hh], [0, hh], [hw, 0], [0, 0]];
+
+        for (const [ox, oy] of offsets) {
+            const tile = new Uint8ClampedArray(hw * hh * 4);
+            for (let y = 0; y < hh; y++) {
+                for (let x = 0; x < hw; x++) {
+                    const si = ((oy + y) * w + (ox + x)) * 4;
+                    const di = (y * hw + x) * 4;
+                    tile[di]     = rgba[si];
+                    tile[di + 1] = rgba[si + 1];
+                    tile[di + 2] = rgba[si + 2];
+                    tile[di + 3] = rgba[si + 3];
+                }
+            }
+
+            const r = (jsQR as any)(tile, hw, hh, { inversionAttempts: 'attemptBoth' });
+            if (r?.data) return r.data;
+
+            const binTile = this.binarizeRgba(tile, hw, hh);
+            const br = (jsQR as any)(binTile, hw, hh, { inversionAttempts: 'attemptBoth' });
+            if (br?.data) return br.data;
+        }
+        return null;
+    }
+
+    /** Nearest-neighbor downscale de buffer RGBA. */
+    private static nearestNeighborDownscale(
+        src: Uint8ClampedArray,
+        sw: number, sh: number,
+        dw: number, dh: number,
+    ): Uint8ClampedArray {
+        const dst = new Uint8ClampedArray(dw * dh * 4);
+        for (let y = 0; y < dh; y++) {
+            const sy = Math.floor(y * sh / dh);
+            for (let x = 0; x < dw; x++) {
+                const sx = Math.floor(x * sw / dw);
+                const si = (sy * sw + sx) * 4;
+                const di = (y * dw + x) * 4;
+                dst[di]     = src[si];
+                dst[di + 1] = src[si + 1];
+                dst[di + 2] = src[si + 2];
+                dst[di + 3] = src[si + 3];
+            }
+        }
+        return dst;
     }
 
     /** Descomprime una imagen FlateDecode y escanea su QR sincrónicamente. */

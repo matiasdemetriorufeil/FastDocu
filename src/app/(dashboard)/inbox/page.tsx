@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import Link from 'next/link';
-import { FileText, CheckCircle2, Clock, AlertTriangle, Copy, XCircle, ArrowRight } from 'lucide-react';
+import { FileText, CheckCircle2, Clock, AlertTriangle, ArrowRight } from 'lucide-react';
 import MetricCard from '@/components/ui/MetricCard';
 import CapabilityCard from '@/components/ui/CapabilityCard';
 import DocumentCard from '@/components/ui/DocumentCard';
@@ -10,39 +10,59 @@ import { useDocuments } from '@/hooks/useDocuments';
 import { capabilities, computeMetrics } from '@/lib/mock-data';
 import { formatCurrency } from '@/lib/validators';
 
+function getGreeting() {
+    const h = new Date().getHours();
+    if (h < 12) return 'Buenos días';
+    if (h < 19) return 'Buenas tardes';
+    return 'Buenas noches';
+}
+
+function getFormattedDate() {
+    return new Date().toLocaleDateString('es-AR', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+    }).replace(/^\w/, (c) => c.toUpperCase());
+}
+
 export default function InboxDashboardPage() {
     const { documents } = useDocuments();
     const metrics = useMemo(() => computeMetrics(documents), [documents]);
-
-    const recentDocs = documents.slice(0, 4);
+    const recentDocs = documents.slice(0, 8);
 
     return (
-        <div className="flex flex-col gap-8 pb-8">
-            {/* Header */}
+        <div className="flex flex-col gap-5 pb-6">
+
+            {/* Greeting */}
             <div>
-                <h1 className="text-2xl font-bold tracking-tight mb-2" style={{ color: 'var(--text-primary)' }}>
-                    Resumen de Validación
-                </h1>
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                    Métricas y estado general de los documentos administrativos ingresados.
+                <div className="flex items-baseline gap-3">
+                    <h1 className="text-[22px] font-bold tracking-tight" style={{ color: 'var(--text-primary)' }}>
+                        {getGreeting()}, Laura
+                    </h1>
+                    <span className="text-[12px] font-medium hidden md:block" style={{ color: 'var(--text-muted)' }}>
+                        {getFormattedDate()}
+                    </span>
+                </div>
+                <p className="text-[12px] mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                    Resumen de actividad del equipo
                 </p>
             </div>
 
-            {/* Primary KPI */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* KPIs */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
                 <MetricCard
                     label="Total Procesado"
                     value={formatCurrency(metrics.montoTotal)}
-                    icon={<FileText className="h-5 w-5" />}
+                    icon={<FileText className="h-3.5 w-3.5" />}
                     color="#3b82f6"
                     bgColor="#eff6ff"
                     delta={12.5}
-                    deltaLabel="vs. mes anterior"
+                    index={0}
                 />
                 <MetricCard
-                    label="Aprobados Directos"
+                    label="Aprobados"
                     value={metrics.aprobados}
-                    icon={<CheckCircle2 className="h-5 w-5" />}
+                    icon={<CheckCircle2 className="h-3.5 w-3.5" />}
                     color="#16a34a"
                     bgColor="#f0fdf4"
                     delta={5.2}
@@ -51,15 +71,15 @@ export default function InboxDashboardPage() {
                 <MetricCard
                     label="Pendientes"
                     value={metrics.pendientes}
-                    icon={<Clock className="h-5 w-5" />}
+                    icon={<Clock className="h-3.5 w-3.5" />}
                     color="#ca8a04"
                     bgColor="#fefce8"
                     index={2}
                 />
                 <MetricCard
-                    label="Inconsistencias y Errores"
+                    label="Inconsistencias"
                     value={metrics.revisar + metrics.observados + metrics.duplicados}
-                    icon={<AlertTriangle className="h-5 w-5" />}
+                    icon={<AlertTriangle className="h-3.5 w-3.5" />}
                     color="#ea580c"
                     bgColor="#fff7ed"
                     delta={-2.4}
@@ -67,37 +87,66 @@ export default function InboxDashboardPage() {
                 />
             </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                {/* Left Col: Capabilities Showcase */}
-                <div className="col-span-2">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Módulos de Validación</h2>
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Bottom grid */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+
+                {/* Módulos — 2/3 */}
+                <div className="col-span-2 flex flex-col gap-3">
+                    <SectionHeader title="Módulos de Validación" />
+                    <div className="flex flex-col gap-1.5">
                         {capabilities.map((cap, i) => (
                             <CapabilityCard key={cap.id} capability={cap} index={i} />
                         ))}
                     </div>
                 </div>
 
-                {/* Right Col: Recent Activity */}
-                <div className="col-span-1">
-                    <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>Ingresos Recientes</h2>
-                        <Link
-                            href="/documents"
-                            className="text-xs font-semibold text-blue-600 hover:text-blue-700 flex items-center gap-1"
-                        >
-                            Ver todos <ArrowRight className="h-3.5 w-3.5" />
-                        </Link>
-                    </div>
-                    <div className="flex flex-col gap-3">
+                {/* Ingresos Recientes — 1/3 */}
+                <div className="col-span-1 flex flex-col gap-3">
+                    <SectionHeader
+                        title="Ingresos Recientes"
+                        action={
+                            <Link
+                                href="/documents"
+                                className="flex items-center gap-1 text-[11px] font-semibold transition-colors"
+                                style={{ color: 'var(--accent)' }}
+                            >
+                                Ver todos <ArrowRight className="h-3 w-3" />
+                            </Link>
+                        }
+                    />
+                    <div className="flex flex-col gap-1.5">
                         {recentDocs.map((doc, i) => (
-                            <DocumentCard key={doc.id} document={doc} index={i} />
+                            <DocumentCard key={doc.id} document={doc} index={i} compact />
                         ))}
                     </div>
                 </div>
             </div>
+        </div>
+    );
+}
+
+function SectionHeader({
+    title,
+    action,
+}: {
+    title: string;
+    action?: React.ReactNode;
+}) {
+    return (
+        <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+                <span
+                    className="h-3.5 w-[3px] rounded-full"
+                    style={{ background: 'var(--accent)', display: 'inline-block' }}
+                />
+                <h2
+                    className="text-[13px] font-bold uppercase tracking-wider"
+                    style={{ color: 'var(--text-secondary)' }}
+                >
+                    {title}
+                </h2>
+            </div>
+            {action}
         </div>
     );
 }
